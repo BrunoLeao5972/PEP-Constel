@@ -17,6 +17,7 @@ import '../../../../core/data/mongo_service.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../orders/presentation/providers/order_caller_provider.dart';
 import '../../printer_settings_widget.dart';
+import '../widgets/customer_facing_theme_section.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   /// Quando true, mostra só a conexão com o banco (Host/Porta/Banco) e volta
@@ -403,308 +404,340 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       backgroundColor: context.colors.backgroundColor,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 480),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Configurações',
-                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
-              ),
-              Text(
-                'Conexão com o banco local do estabelecimento',
-                style: TextStyle(color: context.colors.textSecondaryColor),
-              ),
-              const SizedBox(height: 24),
-              _buildStatusBanner(context, _testResult ?? dbStatus, config),
-              const SizedBox(height: 24),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _scanning ? null : () => _discoverServer(),
-                  icon: _scanning
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              strokeWidth: 2, color: Colors.white),
-                        )
-                      : const Icon(Icons.wifi_find),
-                  label: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                    child: Text(
-                      _scanning
-                          ? 'Procurando na rede... ($_scanChecked/$_scanTotal)'
-                          : 'Detectar Servidor na Rede',
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Configurações',
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    'Conexão com o banco local do estabelecimento',
+                    style: TextStyle(color: context.colors.textSecondaryColor),
+                  ),
+                  const SizedBox(height: 24),
+                  _buildStatusBanner(context, _testResult ?? dbStatus, config),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _scanning ? null : () => _discoverServer(),
+                      icon: _scanning
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.wifi_find),
+                      label: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Text(
+                          _scanning
+                              ? 'Procurando na rede... ($_scanChecked/$_scanTotal)'
+                              : 'Detectar Servidor na Rede',
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
-              if (_scanMessage != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _scanMessage!,
-                  style: TextStyle(
-                      color: context.colors.textSecondaryColor, fontSize: 13),
-                ),
-              ],
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(child: Divider(color: context.colors.borderColor)),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Text(
-                      'ou configure manualmente',
+                  if (_scanMessage != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _scanMessage!,
+                      style: TextStyle(
+                          color: context.colors.textSecondaryColor,
+                          fontSize: 13),
+                    ),
+                  ],
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Expanded(
+                          child: Divider(color: context.colors.borderColor)),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          'ou configure manualmente',
+                          style: TextStyle(
+                              color: context.colors.textSecondaryColor,
+                              fontSize: 12),
+                        ),
+                      ),
+                      Expanded(
+                          child: Divider(color: context.colors.borderColor)),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  TextField(
+                    controller: _hostController,
+                    decoration: const InputDecoration(labelText: 'Host'),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _portController,
+                          enabled: _portEditable,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(labelText: 'Porta'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: IconButton(
+                          icon: Icon(
+                              _portEditable
+                                  ? Icons.lock_open_outlined
+                                  : Icons.edit_outlined,
+                              size: 18),
+                          tooltip: 'Liberar edição',
+                          onPressed: _portEditable ? null : _unlockPortEditing,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _databaseController,
+                    enabled: false,
+                    decoration: const InputDecoration(labelText: 'Banco'),
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed:
+                              _testingConnection ? null : _testConnection,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: _testingConnection
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  )
+                                : const Text('Testar Conexão'),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _save,
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Text('Salvar'),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (!widget.connectionOnly) ...[
+                    const SizedBox(height: 40),
+                    Divider(color: context.colors.borderColor),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Modalidades de Atendimento',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildModalitySwitch(
+                      context,
+                      label: 'Balcão',
+                      value: modalities.balcaoEnabled,
+                      onChanged: _setBalcaoEnabled,
+                    ),
+                    _buildModalitySwitch(
+                      context,
+                      label: 'Mesa',
+                      value: modalities.mesaEnabled,
+                      onChanged: _setMesaEnabled,
+                    ),
+                    _buildModalitySwitch(
+                      context,
+                      label: 'Cartão',
+                      value: modalities.cartaoEnabled,
+                      onChanged: _setCartaoEnabled,
+                    ),
+                    const SizedBox(height: 40),
+                    Divider(color: context.colors.borderColor),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Exibição do Painel',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    _buildModalitySwitch(
+                      context,
+                      label: 'Balcão',
+                      value: panelDisplay.showBalcao,
+                      onChanged: _setPanelShowBalcao,
+                    ),
+                    _buildModalitySwitch(
+                      context,
+                      label: 'Mesa',
+                      value: panelDisplay.showMesa,
+                      onChanged: _setPanelShowMesa,
+                    ),
+                    _buildModalitySwitch(
+                      context,
+                      label: 'Cartão',
+                      value: panelDisplay.showCartao,
+                      onChanged: _setPanelShowCartao,
+                    ),
+                    const SizedBox(height: 40),
+                    Divider(color: context.colors.borderColor),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Chamador de Pedidos',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 12),
+                    SegmentedButton<CallerNumberingSource>(
+                      segments: const [
+                        ButtonSegment(
+                          value: CallerNumberingSource.pdv,
+                          label: Text('Numeração do PDV'),
+                        ),
+                        ButtonSegment(
+                          value: CallerNumberingSource.kds,
+                          label: Text('KDS controla'),
+                        ),
+                      ],
+                      selected: {callerConfig.source},
+                      onSelectionChanged: (selection) =>
+                          _setCallerSource(selection.first),
+                    ),
+                    if (callerConfig.source == CallerNumberingSource.kds) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: context.colors.backgroundColor,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: context.colors.borderColor),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.confirmation_number_outlined,
+                                size: 18,
+                                color: context.colors.textSecondaryColor),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Sequência: ${kdsNextNumber.toString().padLeft(2, '0')}',
+                                style: TextStyle(
+                                    color: context.colors.textSecondaryColor,
+                                    fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: _resetSequenceNow,
+                              icon: const Icon(Icons.restart_alt, size: 18),
+                              label: const Text('Zerar Agora'),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: _startNumberController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                            labelText: 'Começar a partir de'),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildModalitySwitch(
+                        context,
+                        label: 'Zerar diariamente',
+                        value: callerConfig.resetDaily,
+                        onChanged: _setCallerResetDaily,
+                      ),
+                    ],
+                    if (Platform.isWindows) ...[
+                      const SizedBox(height: 40),
+                      Divider(color: context.colors.borderColor),
+                      const SizedBox(height: 24),
+                      const PrinterSettingsWidget(),
+                    ],
+                    const SizedBox(height: 40),
+                    Divider(color: context.colors.borderColor),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Alertas de Tempo',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      'Quando um pedido passa desses tempos, o card pisca na Cozinha pra '
+                      'chamar atenção. Hoje é o mesmo limite pra qualquer produto — no futuro '
+                      'isso deve vir por produto.',
                       style: TextStyle(
                           color: context.colors.textSecondaryColor,
                           fontSize: 12),
                     ),
-                  ),
-                  Expanded(child: Divider(color: context.colors.borderColor)),
-                ],
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                controller: _hostController,
-                decoration: const InputDecoration(labelText: 'Host'),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _portController,
-                      enabled: _portEditable,
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _alertMinutesController,
                       keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'Porta'),
+                      decoration: const InputDecoration(
+                          labelText: 'Tempo de alerta (min)'),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: IconButton(
-                      icon: Icon(
-                          _portEditable
-                              ? Icons.lock_open_outlined
-                              : Icons.edit_outlined,
-                          size: 18),
-                      tooltip: 'Liberar edição',
-                      onPressed: _portEditable ? null : _unlockPortEditing,
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _criticalMinutesController,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                          labelText: 'Tempo crítico (min)'),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _databaseController,
-                enabled: false,
-                decoration: const InputDecoration(labelText: 'Banco'),
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _testingConnection ? null : _testConnection,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: _testingConnection
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Text('Testar Conexão'),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _saveKdsSettings,
+                        icon: const Icon(Icons.save_outlined),
+                        label: const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Text('Salvar'),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _save,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: Text('Salvar'),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              if (!widget.connectionOnly) ...[
-                const SizedBox(height: 40),
-                Divider(color: context.colors.borderColor),
-                const SizedBox(height: 24),
-                const Text(
-                  'Modalidades de Atendimento',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-                _buildModalitySwitch(
-                  context,
-                  label: 'Balcão',
-                  value: modalities.balcaoEnabled,
-                  onChanged: _setBalcaoEnabled,
-                ),
-                _buildModalitySwitch(
-                  context,
-                  label: 'Mesa',
-                  value: modalities.mesaEnabled,
-                  onChanged: _setMesaEnabled,
-                ),
-                _buildModalitySwitch(
-                  context,
-                  label: 'Cartão',
-                  value: modalities.cartaoEnabled,
-                  onChanged: _setCartaoEnabled,
-                ),
-                const SizedBox(height: 40),
-                Divider(color: context.colors.borderColor),
-                const SizedBox(height: 24),
-                const Text(
-                  'Exibição do Painel',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-                _buildModalitySwitch(
-                  context,
-                  label: 'Balcão',
-                  value: panelDisplay.showBalcao,
-                  onChanged: _setPanelShowBalcao,
-                ),
-                _buildModalitySwitch(
-                  context,
-                  label: 'Mesa',
-                  value: panelDisplay.showMesa,
-                  onChanged: _setPanelShowMesa,
-                ),
-                _buildModalitySwitch(
-                  context,
-                  label: 'Cartão',
-                  value: panelDisplay.showCartao,
-                  onChanged: _setPanelShowCartao,
-                ),
-                const SizedBox(height: 40),
-                Divider(color: context.colors.borderColor),
-                const SizedBox(height: 24),
-                const Text(
-                  'Chamador de Pedidos',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 12),
-                SegmentedButton<CallerNumberingSource>(
-                  segments: const [
-                    ButtonSegment(
-                      value: CallerNumberingSource.pdv,
-                      label: Text('Numeração do PDV'),
-                    ),
-                    ButtonSegment(
-                      value: CallerNumberingSource.kds,
-                      label: Text('KDS controla'),
                     ),
                   ],
-                  selected: {callerConfig.source},
-                  onSelectionChanged: (selection) =>
-                      _setCallerSource(selection.first),
-                ),
-                if (callerConfig.source == CallerNumberingSource.kds) ...[
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: context.colors.backgroundColor,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: context.colors.borderColor),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.confirmation_number_outlined,
-                            size: 18, color: context.colors.textSecondaryColor),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Sequência: ${kdsNextNumber.toString().padLeft(2, '0')}',
-                            style: TextStyle(
-                                color: context.colors.textSecondaryColor,
-                                fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                        TextButton.icon(
-                          onPressed: _resetSequenceNow,
-                          icon: const Icon(Icons.restart_alt, size: 18),
-                          label: const Text('Zerar Agora'),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _startNumberController,
-                    keyboardType: TextInputType.number,
-                    decoration:
-                        const InputDecoration(labelText: 'Começar a partir de'),
-                  ),
-                  const SizedBox(height: 8),
-                  _buildModalitySwitch(
-                    context,
-                    label: 'Zerar diariamente',
-                    value: callerConfig.resetDaily,
-                    onChanged: _setCallerResetDaily,
-                  ),
                 ],
-                if (Platform.isWindows) ...[
-                  const SizedBox(height: 40),
-                  Divider(color: context.colors.borderColor),
-                  const SizedBox(height: 24),
-                  const PrinterSettingsWidget(),
-                ],
-                const SizedBox(height: 40),
-                Divider(color: context.colors.borderColor),
-                const SizedBox(height: 24),
-                const Text(
-                  'Alertas de Tempo',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+            ),
+            if (!widget.connectionOnly) ...[
+              const SizedBox(height: 40),
+              // Fora da coluna de 480 px de propósito: esta seção mostra os
+              // controles e o preview do Painel lado a lado, e nessa largura
+              // eles não caberiam juntos.
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 1060),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Divider(color: context.colors.borderColor),
+                    const SizedBox(height: 24),
+                    const CustomerFacingThemeSection(),
+                  ],
                 ),
-                Text(
-                  'Quando um pedido passa desses tempos, o card pisca na Cozinha pra '
-                  'chamar atenção. Hoje é o mesmo limite pra qualquer produto — no futuro '
-                  'isso deve vir por produto.',
-                  style: TextStyle(
-                      color: context.colors.textSecondaryColor, fontSize: 12),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _alertMinutesController,
-                  keyboardType: TextInputType.number,
-                  decoration:
-                      const InputDecoration(labelText: 'Tempo de alerta (min)'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _criticalMinutesController,
-                  keyboardType: TextInputType.number,
-                  decoration:
-                      const InputDecoration(labelText: 'Tempo crítico (min)'),
-                ),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _saveKdsSettings,
-                    icon: const Icon(Icons.save_outlined),
-                    label: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 12),
-                      child: Text('Salvar'),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ],
-          ),
+          ],
         ),
       ),
     );

@@ -26,7 +26,8 @@ class _TestOrderRepository implements OrderRepository {
   Future<void> updateOrderStatus(String orderId, OrderStatus newStatus) async {}
 
   @override
-  Future<void> updateItemStatus(String orderId, String itemId, OrderStatus newStatus) async {}
+  Future<void> updateItemStatus(
+      String orderId, String itemId, OrderStatus newStatus) async {}
 }
 
 class _FakeAuthController extends AuthController {
@@ -36,7 +37,8 @@ class _FakeAuthController extends AuthController {
 }
 
 void main() {
-  testWidgets('renders KDS shell for a logged-in user', (WidgetTester tester) async {
+  testWidgets('renders KDS shell for a logged-in user',
+      (WidgetTester tester) async {
     await initializeDateFormatting('pt_BR');
     tester.view.physicalSize = const Size(2400, 1200);
     tester.view.devicePixelRatio = 1.0;
@@ -55,7 +57,11 @@ void main() {
           authControllerProvider.overrideWith(
             (ref) => _FakeAuthController(
               ref,
-              KdsUser(id: '1', credencial: 'teste', nome: 'Teste', administrador: false),
+              KdsUser(
+                  id: '1',
+                  credencial: 'teste',
+                  nome: 'Teste',
+                  administrador: false),
             ),
           ),
         ],

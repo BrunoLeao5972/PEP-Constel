@@ -41,10 +41,20 @@ class CustomerFacingPreviewWidget extends ConsumerWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final width = constraints.maxWidth;
+        // A miniatura tem proporção fixa: normalmente a largura manda, mas
+        // quando ela mora num card de altura definida (o preview fixo ao
+        // lado dos controles), quem manda é a altura — senão ela estouraria
+        // o card em janelas baixas.
+        var width = constraints.maxWidth;
+        var height = width * (_designHeight / _designWidth);
+        if (constraints.maxHeight.isFinite && height > constraints.maxHeight) {
+          height = constraints.maxHeight;
+          width = height * (_designWidth / _designHeight);
+        }
+
         return SizedBox(
           width: width,
-          height: width * (_designHeight / _designWidth),
+          height: height,
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: FittedBox(

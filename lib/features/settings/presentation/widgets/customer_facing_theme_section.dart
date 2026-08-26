@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/config/customer_facing_theme_config.dart';
 import '../../../../core/config/customer_facing_theme_config_provider.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../theme/settings_tokens.dart';
 import 'customer_facing_preview_widget.dart';
+import 'settings_section_card.dart';
 
 /// Seção "Personalização do Painel Chamador" das Configurações: os controles
 /// de cor à esquerda e o preview vivo à direita (empilhados no celular).
@@ -148,91 +150,104 @@ class _CustomerFacingThemeSectionState
         previewBrightness == Brightness.dark ? AppColors.dark : AppColors.light;
     final palette = config.resolve(previewTheme);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Personalização do Painel Chamador',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Deixe a tela que o cliente vê com a cara do estabelecimento. Cada '
-          'ajuste aparece na hora aqui no preview e na aba Painel, vale no '
-          'Windows e no Android, e fica salvo neste aparelho — não precisa '
-          'salvar.',
-          style:
-              TextStyle(color: context.colors.textSecondaryColor, fontSize: 12),
-        ),
-        const SizedBox(height: 20),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final controls = _buildControls(context, config, palette);
-            final preview = _buildPreviewPane(context, previewBrightness);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Só dá para prender o preview se a aba disser qual é a altura dela.
+        // Dentro de um scroll (altura infinita) não existe "ficar parado":
+        // aí os dois cards viram uma coluna que rola junto.
+        final hasBoundedHeight = constraints.maxHeight.isFinite;
+        final isWide = constraints.maxWidth >= _sideBySideBreakpoint;
 
-            if (constraints.maxWidth >= _sideBySideBreakpoint) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(flex: 5, child: controls),
-                  const SizedBox(width: 28),
-                  Expanded(flex: 5, child: preview),
-                ],
-              );
-            }
+        // Com altura definida e espaço horizontal, os controles rolam por
+        // dentro do próprio card — é o que deixa o preview parado ao lado.
+        final split = hasBoundedHeight && isWide;
+        final controls = _buildControls(context, config, palette);
 
-            // Estreito (celular/tablet em pé): preview em cima, para a
-            // pessoa ver o efeito sem precisar rolar de volta a cada toque.
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                preview,
-                const SizedBox(height: 24),
-                controls,
-              ],
-            );
-          },
-        ),
-      ],
+        final controlsCard = SettingsSectionCard(
+          icon: Icons.palette_outlined,
+          title: 'Cores do Painel',
+          subtitle: 'Cada ajuste aparece na hora no preview e na aba Painel, '
+              'vale no Windows e no Android, e fica salvo neste aparelho — '
+              'não precisa salvar.',
+          fillHeight: split,
+          child: split ? SingleChildScrollView(child: controls) : controls,
+        );
+
+        final previewCard = SettingsSectionCard(
+          icon: Icons.tv_outlined,
+          title: 'Preview em tempo real',
+          subtitle: 'É o mesmo desenho da tela do cliente, com as mesmas '
+              'cores e ícones — só com pedidos de exemplo.',
+          fillHeight: split,
+          child: _buildPreviewPane(
+            context,
+            previewBrightness,
+            expandPreview: split,
+          ),
+        );
+
+        if (split) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: controlsCard),
+              const SizedBox(width: SettingsTokens.cardSpacing),
+              Expanded(child: previewCard),
+            ],
+          );
+        }
+
+        // Estreito: preview em cima (é o que se quer olhar) e controles
+        // embaixo, tudo num scroll só.
+        final stacked = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            previewCard,
+            const SizedBox(height: SettingsTokens.cardSpacing),
+            controlsCard,
+          ],
+        );
+
+        return hasBoundedHeight
+            ? SingleChildScrollView(child: stacked)
+            : stacked;
+      },
     );
   }
 
-  Widget _buildPreviewPane(BuildContext context, Brightness previewBrightness) {
+  Widget _buildPreviewPane(
+    BuildContext context,
+    Brightness previewBrightness, {
+    required bool expandPreview,
+  }) {
+    final tokens = SettingsTokens.of(context);
+
+    final preview = DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tokens.cardBorder),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(1),
+        child: CustomerFacingPreviewWidget(
+          themeColors: previewBrightness == Brightness.dark
+              ? AppColors.dark
+              : AppColors.light,
+        ),
+      ),
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Icon(Icons.tv_outlined,
-                size: 18, color: context.colors.textSecondaryColor),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Preview em tempo real',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: context.colors.textSecondaryColor,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: context.colors.borderColor),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(1),
-            child: CustomerFacingPreviewWidget(
-              themeColors: previewBrightness == Brightness.dark
-                  ? AppColors.dark
-                  : AppColors.light,
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
+        // Expandido, o preview recebe uma altura definida e se encaixa nela
+        // (a miniatura tem proporção fixa e se ajusta sozinha); no modo
+        // empilhado ele usa a altura que a largura pedir.
+        if (expandPreview)
+          Expanded(child: Align(alignment: Alignment.topCenter, child: preview))
+        else
+          preview,
+        const SizedBox(height: 12),
         Row(
           children: [
             Expanded(

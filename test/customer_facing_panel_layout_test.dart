@@ -1,7 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mongo_dart/mongo_dart.dart' show Db;
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:kds_constel/core/data/mongo_service.dart';
+import 'package:kds_constel/features/settings/presentation/pages/settings_page.dart';
 
 import 'package:kds_constel/core/config/customer_facing_theme_config_provider.dart';
 import 'package:kds_constel/core/theme/app_themes.dart';
@@ -9,6 +15,7 @@ import 'package:kds_constel/features/orders/domain/entities/order.dart';
 import 'package:kds_constel/features/orders/domain/repositories/order_repository.dart';
 import 'package:kds_constel/features/orders/presentation/pages/customer_facing_page.dart';
 import 'package:kds_constel/features/orders/presentation/providers/order_provider.dart';
+import 'package:kds_constel/features/settings/presentation/widgets/customer_facing_preview_widget.dart';
 import 'package:kds_constel/features/settings/presentation/widgets/customer_facing_theme_section.dart';
 
 /// Painel e Configurações rodam em TV, notebook, tablet e celular, no Windows
@@ -156,4 +163,104 @@ void main() {
           container.read(customerFacingThemeConfigProvider).isDefault, isTrue);
     });
   }
+
+  // A tela de Configurações inteira: quatro abas, cards em duas colunas no
+  // desktop e uma no celular. Percorre todas as abas em cada resolução
+  // porque um card só estoura quando é realmente construído.
+  for (final size in const <Size>[
+    Size(1920, 1080),
+    Size(1440, 900),
+    Size(1180, 820),
+    Size(1024, 768),
+    Size(800, 600),
+    Size(412, 915),
+  ]) {
+    testWidgets(
+        'Configurações: abas sem overflow em ${size.width}x${size.height}',
+        (tester) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            // Sem isso o teste tentaria abrir uma conexão real com o Mongo.
+            mongoDbProvider.overrideWith((ref) => Completer<Db>().future),
+          ],
+          child: MaterialApp(
+            theme: AppThemes.dark,
+            home: const SettingsPage(),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(tester.takeException(), isNull, reason: 'aba inicial em $size');
+
+      for (final aba in const [
+        'Modalidades & KDS',
+        'Impressora & Alertas',
+        'Personalização do Painel',
+        'Conexão & Banco',
+      ]) {
+        await tester.ensureVisible(find.text(aba));
+        // warnIfMissed: false — a Tab tem ícone + texto num Row; o toque
+        // acerta o texto, mas quem recebe o gesto é o InkResponse do Tab ao
+        // redor. É só o aviso, o toque funciona (a troca de aba acontece).
+        await tester.tap(find.text(aba), warnIfMissed: false);
+        // Não usa pumpAndSettle: o banner de status da aba de Conexão anima
+        // um CircularProgressIndicator enquanto a conexão fica pendente
+        // (de propósito, no override acima), e isso nunca "assenta".
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(tester.takeException(), isNull, reason: '$aba em $size');
+      }
+    });
+  }
+
+  testWidgets('Personalização: preview fica fixo ao lado dos controles',
+      (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: AppThemes.dark,
+          home: const Scaffold(
+            // Altura definida (como a aba dá) + largura de desktop = split.
+            body: Padding(
+              padding: EdgeInsets.all(24),
+              child: SizedBox(
+                height: double.infinity,
+                child: CustomerFacingThemeSection(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+
+    // Os controles rolam por dentro do card; o preview não está nesse scroll.
+    final scrollDosControles = find.ancestor(
+      of: find.text('Fundo da tela'),
+      matching: find.byType(SingleChildScrollView),
+    );
+    expect(scrollDosControles, findsOneWidget);
+    expect(
+      find.descendant(
+        of: scrollDosControles,
+        matching: find.byType(CustomerFacingPreviewWidget),
+      ),
+      findsNothing,
+    );
+
+    // E o preview continua na tela mesmo com os controles rolados até o fim.
+    await tester.ensureVisible(find.text('Restaurar Padrões'));
+    await tester.pumpAndSettle();
+    expect(find.byType(CustomerFacingPreviewWidget), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

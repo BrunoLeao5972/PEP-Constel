@@ -5,6 +5,7 @@ import '../../core/config/printer_config.dart';
 import '../../core/config/printer_config_provider.dart';
 import '../../core/theme/app_colors.dart';
 import '../../services/kds_printer_service.dart';
+import 'presentation/theme/settings_tokens.dart';
 
 /// Seção de configuração da impressora (a mesma lista de "Impressoras e
 /// scanners" do Windows) e largura do papel — pensada pra ser embutida na
@@ -59,21 +60,11 @@ class _PrinterSettingsWidgetState extends ConsumerState<PrinterSettingsWidget> {
     final config = ref.watch(printerConfigProvider);
     _loadPrinters();
 
+    // Sem título nem subtítulo próprios: quem os mostra é o card de seção
+    // que embrulha este widget na tela de Configurações.
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
-          'Impressora',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        Text(
-          'A mesma lista de "Impressoras e scanners" do Windows — se a impressora já '
-          'imprime a página de teste do Windows normalmente, ela deve funcionar aqui '
-          'também.',
-          style:
-              TextStyle(color: context.colors.textSecondaryColor, fontSize: 12),
-        ),
-        const SizedBox(height: 16),
         if (_availablePrinters.isEmpty)
           Text(
             'Nenhuma impressora encontrada no Windows.',
@@ -106,31 +97,39 @@ class _PrinterSettingsWidgetState extends ConsumerState<PrinterSettingsWidget> {
               ),
             ],
           ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 16),
+        Text(
+          'LARGURA DA BOBINA',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1,
+            color: SettingsTokens.of(context).secondaryText,
+          ),
+        ),
+        const SizedBox(height: 8),
         SegmentedButton<PrinterPaperWidth>(
           segments: const [
             ButtonSegment(value: PrinterPaperWidth.mm58, label: Text('58mm')),
             ButtonSegment(value: PrinterPaperWidth.mm80, label: Text('80mm')),
           ],
           selected: {config.paperWidth},
+          showSelectedIcon: false,
           onSelectionChanged: (selection) => ref
               .read(printerConfigProvider.notifier)
               .setPaperWidth(selection.first),
         ),
-        const SizedBox(height: 12),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            onPressed: _testing ? null : () => _testPrint(config),
-            icon: _testing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.print_outlined),
-            label: const Text('Testar Impressão'),
-          ),
+        const SizedBox(height: 16),
+        OutlinedButton.icon(
+          onPressed: _testing ? null : () => _testPrint(config),
+          icon: _testing
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.print_outlined),
+          label: const Text('Testar Impressão'),
         ),
       ],
     );
@@ -146,9 +145,9 @@ class _PrinterSettingsWidgetState extends ConsumerState<PrinterSettingsWidget> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: context.colors.backgroundColor,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: context.colors.borderColor),
+        color: SettingsTokens.of(context).inputFill,
+        borderRadius: BorderRadius.circular(SettingsTokens.inputRadius),
+        border: Border.all(color: SettingsTokens.of(context).cardBorder),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<T>(

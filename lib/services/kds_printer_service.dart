@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:intl/intl.dart';
 import 'package:mongo_dart/mongo_dart.dart';
 import 'package:win32/win32.dart';
@@ -64,7 +65,7 @@ class KdsPrinterService {
   /// imprime de verdade, escrevendo o resultado de volta na fila.
   Future<KdsPrintOutcome> printOrder(Order order, PrinterConfig config,
       {Db? db}) async {
-    final ticket = await _buildOrderTicket(order, config.paperWidth.escPosSize);
+    final ticket = await buildOrderTicket(order, config.paperWidth.escPosSize);
     if (Platform.isWindows) {
       return _sendToPrinter(config, ticket);
     }
@@ -80,50 +81,61 @@ class KdsPrinterService {
     return _sendToPrinter(config, ticket);
   }
 
-  Future<Uint8List> _buildOrderTicket(Order order, PaperSize paperSize) async {
+  /// Layout desenhado à mão pelo cliente (num editor de texto comum, daí
+  /// medir tudo em colunas de um grid monoespaçado de 48 caracteres — a
+  /// largura de uma bobina de 80mm em fonte normal). Em vez de repetir esse
+  /// cálculo manualmente (o que só funcionaria pra 80mm), a MESMA estrutura
+  /// é montada com `generator.row()`/`PosColumn` — a biblioteca já resolve
+  /// a largura de cada coluna a partir do papel de verdade configurado
+  /// (`paperSize`), então o layout sai proporcional tanto em 58mm quanto em
+  /// 80mm sem precisar de duas versões.
+  ///
+  /// Sem o `_` (e com [visibleForTesting]): é a única forma de testar o
+  /// conteúdo do ticket sem imprimir de verdade — Dart não deixa um teste
+  /// em outro arquivo chamar um método privado desta classe.
+  @visibleForTesting
+  Future<Uint8List> buildOrderTicket(Order order, PaperSize paperSize) async {
     final profile = await CapabilityProfile.load();
     final generator = Generator(paperSize, profile);
-    final dateFormat = DateFormat('dd/MM/yyyy HH:mm');
     List<int> bytes = [];
 
-    bytes += generator.reset();
+    bytes += _init(generator);
 
-    bytes += generator.text(
-      'PEP CONSTEL',
-      styles: const PosStyles(
-        align: PosAlign.center,
-        bold: true,
-        height: PosTextSize.size2,
-        width: PosTextSize.size2,
-      ),
-    );
-    bytes += generator.text('-- REIMPRESSÃO --',
-        styles: const PosStyles(align: PosAlign.center));
+    bytes += generator.hr(ch: '=');
+    bytes += generator.text('PEP CONSTEL',
+        styles: const PosStyles(align: PosAlign.center, bold: true));
     bytes += generator.hr(ch: '=');
 
-    bytes += generator.text('Pedido: #${order.number}',
-        styles: const PosStyles(bold: true));
-    bytes += generator.text('Lançamento: ${order.roundCode}');
-    bytes += generator.text('Data: ${dateFormat.format(order.timestamp)}');
+    bytes += generator.row([
+      PosColumn(
+        text: 'PEDIDO: #${order.number}',
+        width: 7,
+        styles: const PosStyles(bold: true),
+      ),
+      PosColumn(
+        text: 'SENHA: ${_sanitizeForPrinter(order.pdvCallerLabel)}',
+        width: 5,
+        styles: const PosStyles(bold: true, align: PosAlign.right),
+      ),
+    ]);
+    bytes +=
+        generator.text('HORA: ${DateFormat('HH:mm').format(order.timestamp)}');
     bytes += generator.hr(ch: '-');
 
-    bytes += generator.text(
-      order.modalityDisplay,
-      styles: const PosStyles(
-        align: PosAlign.center,
-        bold: true,
-        height: PosTextSize.size2,
-        width: PosTextSize.size2,
-      ),
-    );
-    bytes += generator.hr(ch: '=');
+    bytes += generator.row([
+      PosColumn(text: 'QTD', width: 3, styles: const PosStyles(bold: true)),
+      PosColumn(text: 'ITEM', width: 9, styles: const PosStyles(bold: true)),
+    ]);
+    bytes += generator.hr(ch: '-');
 
     for (final item in order.items) {
-      bytes += generator.text('${item.quantity}x ${item.name}',
-          styles: const PosStyles(bold: true));
+      bytes += generator.row([
+        PosColumn(text: '${item.quantity}x', width: 3),
+        PosColumn(text: _sanitizeForPrinter(item.name), width: 9),
+      ]);
       final observation = item.observation?.trim();
       if (observation != null && observation.isNotEmpty) {
-        bytes += generator.text('  Obs: $observation',
+        bytes += generator.text('  Obs: ${_sanitizeForPrinter(observation)}',
             styles: const PosStyles(reverse: true));
       }
     }
@@ -133,19 +145,81 @@ class KdsPrinterService {
     if (generalObservation != null && generalObservation.isNotEmpty) {
       bytes += generator.text('OBSERVAÇÃO GERAL',
           styles: const PosStyles(bold: true));
-      bytes += generator.text(generalObservation,
+      bytes += generator.text(_sanitizeForPrinter(generalObservation),
           styles: const PosStyles(reverse: true));
       bytes += generator.hr(ch: '=');
     }
 
-    bytes += generator.text('Reimpresso em',
+    bytes += generator.text('solucaosistemas.net',
         styles: const PosStyles(align: PosAlign.center));
-    bytes += generator.text(dateFormat.format(DateTime.now()),
-        styles: const PosStyles(align: PosAlign.center));
+    bytes += generator.hr(ch: '=');
 
     bytes += generator.feed(2);
-    bytes += generator.cut();
+    bytes += _cut(generator);
     return Uint8List.fromList(bytes);
+  }
+
+  /// `Generator(paperSize, profile)` codifica todo texto em Latin-1 por
+  /// padrão, mas nunca diz pra impressora QUAL página de código usar pra
+  /// interpretar esses bytes — ela usa a que já vem configurada de fábrica,
+  /// e isso varia de marca pra marca (Epson, Elgin, GoldenTec, Daruma...).
+  /// Sem fixar isso, os acentos do português só saem certos por sorte,
+  /// quando o padrão de fábrica coincidir com Latin-1.
+  ///
+  /// `CP1252` (Windows-1252) resolve isso pra qualquer impressora ESC/POS
+  /// compatível: é praticamente universal (é a página que todo software de
+  /// PDV baseado em Windows já assume) e, no intervalo 0xA0-0xFF — onde
+  /// ficam á, é, í, ó, ú, â, ê, ô, ã, õ, ç, à — os bytes são IDÊNTICOS aos
+  /// de Latin-1. Por isso dá pra travar a impressora em CP1252 sem trocar a
+  /// codificação Latin-1 que o `Generator` já usa: as duas concordam
+  /// exatamente onde importa (o `_sanitizeForPrinter` já cuida do que não
+  /// concorda, tipo aspas curvas, fora dessa faixa).
+  List<int> _init(Generator generator) {
+    List<int> bytes = [];
+    bytes += generator.reset();
+    bytes += generator.setGlobalCodeTable('CP1252');
+    return bytes;
+  }
+
+  /// `generator.cut()` manda o corte no formato `GS V 0` (`0x1D 0x56 0x30`),
+  /// o padrão de impressoras Epson mais novas. A Daruma DR700 é da linha
+  /// "não fiscal" brasileira e responde ao comando legado `ESC i`
+  /// (`0x1B 0x69`) — se ela não reconhece `GS V`, o corte nunca é
+  /// executado e (nos testes reais com a impressora) o buffer de texto
+  /// também não chega a ser descarregado pro cabeçote térmico: o Windows
+  /// confirma que os bytes saíram pra porta, mas nada sai no papel.
+  List<int> _cut(Generator generator) => generator.rawBytes([0x1B, 0x69]);
+
+  /// O ESC/POS manda os bytes crus pra impressora (sem UTF-8): o `Generator`
+  /// codifica cada texto em Latin-1, que cobre os acentos do português mas
+  /// não aspas curvas ("smart quotes"), travessão, reticências ou emoji —
+  /// coisas fáceis de vir de um copiar-colar no PDV. Um único caractere fora
+  /// dessa faixa faz o `latin1.encode` da biblioteca lançar exceção e
+  /// derruba o ticket inteiro (nada chega a ser impresso, sem aviso nenhum,
+  /// já que quem imprime só descobre isso tentando com um pedido de
+  /// verdade — o teste de conectividade usa um texto fixo que nunca teria
+  /// esse problema). Por isso todo texto vindo do pedido passa por aqui
+  /// antes de entrar num `generator.text()`/`row()`.
+  String _sanitizeForPrinter(String text) {
+    const replacements = {
+      '’': "'",
+      '‘': "'",
+      '“': '"',
+      '”': '"',
+      '–': '-',
+      '—': '-',
+      '…': '...',
+    };
+    final buffer = StringBuffer();
+    for (final rune in text.runes) {
+      if (rune <= 0xFF) {
+        buffer.writeCharCode(rune);
+        continue;
+      }
+      final replacement = replacements[String.fromCharCode(rune)];
+      buffer.write(replacement ?? '?');
+    }
+    return buffer.toString();
   }
 
   Future<Uint8List> _buildTestTicket(PaperSize paperSize) async {
@@ -153,7 +227,7 @@ class KdsPrinterService {
     final generator = Generator(paperSize, profile);
     List<int> bytes = [];
 
-    bytes += generator.reset();
+    bytes += _init(generator);
     bytes += generator.text(
       'PEP CONSTEL',
       styles: const PosStyles(
@@ -175,7 +249,7 @@ class KdsPrinterService {
       styles: const PosStyles(align: PosAlign.center),
     );
     bytes += generator.feed(2);
-    bytes += generator.cut();
+    bytes += _cut(generator);
     return Uint8List.fromList(bytes);
   }
 

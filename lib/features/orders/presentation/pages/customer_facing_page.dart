@@ -305,7 +305,12 @@ class _ColumnsBoard extends StatelessWidget {
               palette: palette,
               metrics: metrics,
               emptyMessage: 'Nenhum pedido em preparo',
-              tileWidth: 190,
+              // Mesmo tileWidth da Fila de Prontos (abaixo): as duas colunas
+              // têm o mesmo flex (3), então usar o mesmo valor aqui garante
+              // o mesmo número de colunas/slots por linha nas duas — antes,
+              // Em Preparo usava 190 (menos slots por linha que Prontos, que
+              // usava 170) e as duas ficavam com densidades diferentes.
+              tileWidth: 170,
             ),
           ),
         ),

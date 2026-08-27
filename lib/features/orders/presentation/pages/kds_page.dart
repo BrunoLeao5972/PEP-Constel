@@ -2,14 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/config/order_timing_config_provider.dart';
-import '../../../../core/config/printer_config_provider.dart';
-import '../../../../core/data/mongo_service.dart';
+import '../../../../core/config/alert_appearance_config_provider.dart';
+import '../../../../core/config/kds_production_mode_config.dart';
+import '../../../../core/config/kds_production_mode_config_provider.dart';
 import '../../../../core/widgets/order_urgency_shell.dart';
 import '../../domain/entities/order.dart';
 import '../providers/order_provider.dart';
 import '../providers/kds_view_provider.dart';
 import '../../../auth/presentation/providers/auth_provider.dart';
-import '../../../../services/kds_printer_service.dart';
 
 class KDSPage extends ConsumerWidget {
   const KDSPage({super.key});
@@ -429,12 +429,13 @@ class KDSPage extends ConsumerWidget {
 
   Widget _buildOrderCard(BuildContext context, WidgetRef ref, Order order) {
     final elapsed = DateTime.now().difference(order.timestamp).inMinutes;
-    final isReady = order.status == OrderStatus.pronto;
     final isAdmin =
         ref.watch(authControllerProvider).valueOrNull?.administrador ?? false;
     final timing = ref.watch(orderTimingConfigProvider);
     final urgency = orderUrgencyFor(order, elapsed, timing);
-    final timeColor = orderUrgencyColor(context, urgency);
+    final timeColor = orderUrgencyColor(context, urgency,
+        alertsEnabled: ref.watch(alertAppearanceConfigProvider).enabled);
+    final productionMode = ref.watch(kdsProductionModeConfigProvider).mode;
 
     return OrderUrgencyShell(
       urgency: urgency,
@@ -488,15 +489,6 @@ class KDSPage extends ConsumerWidget {
                         : FontWeight.bold,
                   ),
                 ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.print_outlined, size: 18),
-                  tooltip: 'Reimprimir',
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                  color: context.colors.textSecondaryColor,
-                  onPressed: () => _reprintOrder(context, ref, order),
-                ),
               ],
             ),
           ),
@@ -504,57 +496,286 @@ class KDSPage extends ConsumerWidget {
           Expanded(
             child: _OrderItemsList(
               order: order,
-              itemRowBuilder: (context, item) =>
-                  _buildKdsItemRow(context, ref, order, item, isAdmin),
+              itemRowBuilder: (context, item) => _buildKdsItemRow(
+                  context, ref, order, item, isAdmin, productionMode),
             ),
           ),
           _buildOrderObservation(context, order.observations),
-          if (isReady)
-            InkWell(
-              onTap: () => ref
-                  .read(orderStatusUpdateProvider.notifier)
-                  .updateStatus(order.id, OrderStatus.entregue),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                color: context.colors.successColor,
-                child: const Text(
-                  'ENTREGAR',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                      color: Colors.black,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2),
-                ),
-              ),
-            )
-          else
-            const SizedBox(height: 12),
+          _buildCardAction(context, ref, order, productionMode, isAdmin),
         ],
       ),
     );
   }
 
-  Future<void> _reprintOrder(
-      BuildContext context, WidgetRef ref, Order order) async {
-    final config = ref.read(printerConfigProvider);
-    final db = await ref.read(mongoDbProvider.future);
-    final outcome = await KdsPrinterService().printOrder(order, config, db: db);
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(outcome.success
-            ? 'Pedido #${order.number} reimpresso.'
-            : (outcome.error ?? 'Falha ao imprimir.')),
-        backgroundColor: outcome.success
-            ? context.colors.successColor
-            : context.colors.errorColor,
+  /// Barra de ação no rodapé do card — o que muda entre os três modos de
+  /// produção (ver [KdsProductionMode]).
+  ///
+  /// Em [KdsProductionMode.perItem], só a entrega usa essa barra (item a
+  /// item não tem como um ficar "pronto" e ainda fazer sentido entregar os
+  /// outros separado — a comanda só chega em "pronto" quando TODOS os itens
+  /// já chegaram lá, ver `Order.status`), exatamente como sempre foi.
+  ///
+  /// Em [KdsProductionMode.wholeOrder], a mesma barra existe em CADA etapa —
+  /// Iniciar Comanda, Finalizar Comanda, Entregar — sempre avançando todos
+  /// os itens de uma vez (`updateStatus`, que já grava o status em todos os
+  /// itens da comanda num só update no Mongo).
+  ///
+  /// Em [KdsProductionMode.mixed], ver [_buildMixedCardAction].
+  Widget _buildCardAction(BuildContext context, WidgetRef ref, Order order,
+      KdsProductionMode mode, bool isAdmin) {
+    switch (mode) {
+      case KdsProductionMode.perItem:
+        if (order.status != OrderStatus.pronto) {
+          return const SizedBox(height: 12);
+        }
+        return _cardActionBar(
+          context,
+          label: 'ENTREGAR',
+          color: context.colors.successColor,
+          onTap: () => ref
+              .read(orderStatusUpdateProvider.notifier)
+              .updateStatus(order.id, OrderStatus.entregue),
+        );
+
+      case KdsProductionMode.wholeOrder:
+        switch (order.status) {
+          case OrderStatus.novo:
+            return _cardActionBar(
+              context,
+              label: 'INICIAR PREPARO',
+              color: context.colors.warningColor,
+              onTap: () => ref
+                  .read(orderStatusUpdateProvider.notifier)
+                  .updateStatus(order.id, OrderStatus.emPreparo),
+            );
+          case OrderStatus.emPreparo:
+            return _cardActionRow(
+              context,
+              revertTo: isAdmin ? OrderStatus.novo : null,
+              onRevert: (status) => ref
+                  .read(orderStatusUpdateProvider.notifier)
+                  .updateStatus(order.id, status),
+              label: 'FINALIZAR PREPARO',
+              color: context.colors.successColor,
+              onTap: () => ref
+                  .read(orderStatusUpdateProvider.notifier)
+                  .updateStatus(order.id, OrderStatus.pronto),
+            );
+          case OrderStatus.pronto:
+            return _cardActionRow(
+              context,
+              revertTo: isAdmin ? OrderStatus.emPreparo : null,
+              onRevert: (status) => ref
+                  .read(orderStatusUpdateProvider.notifier)
+                  .updateStatus(order.id, status),
+              label: 'ENTREGAR',
+              color: context.colors.successColor,
+              onTap: () => ref
+                  .read(orderStatusUpdateProvider.notifier)
+                  .updateStatus(order.id, OrderStatus.entregue),
+            );
+          case OrderStatus.entregue:
+            return const SizedBox(height: 12);
+        }
+
+      case KdsProductionMode.mixed:
+        return _buildMixedCardAction(context, ref, order, isAdmin);
+    }
+  }
+
+  /// Rodapé do modo [KdsProductionMode.mixed]: só aparece quando TODOS os
+  /// itens da comanda estão exatamente na mesma etapa (ver
+  /// [_buildItemAction], que sempre mostra o botão de cada item nesse modo,
+  /// independente disso). Num estado misturado (ex: um item já iniciado
+  /// sozinho, os outros ainda não), o operador segue avançando pelos chips
+  /// de cada item até os itens realinharem — só então a barra em massa
+  /// reaparece. É exatamente o "não ter que escolher se é tudo ou nada"
+  /// pedido: as duas formas de agir convivem, e quem decide a cada toque é
+  /// o operador, não uma configuração prévia.
+  ///
+  /// A checagem de "pronto" aceita itens já `entregue` juntos (não exige
+  /// TODOS exatamente `pronto`): um admin pode reverter um item de
+  /// `entregue` pra `pronto` individualmente (nesta tela ou no
+  /// Administrativo — ver `admin_page.dart`), o que reabre essa comanda no
+  /// quadro ativo com um estado pronto+entregue misto — sem essa folga não
+  /// haveria como reentregar aquele item pela Cozinha (não existe avanço
+  /// por item até "entregue", só em massa). Mesmo critério que
+  /// `Order.status == pronto` já usava antes desse recurso existir.
+  Widget _buildMixedCardAction(
+      BuildContext context, WidgetRef ref, Order order, bool isAdmin) {
+    final items = order.items;
+    if (items.isEmpty) return const SizedBox(height: 12);
+    bool allAt(OrderStatus status) => items.every((i) => i.status == status);
+    final allProntoOuEntregue = items.every((i) =>
+        i.status == OrderStatus.pronto || i.status == OrderStatus.entregue);
+
+    if (allAt(OrderStatus.entregue)) return const SizedBox(height: 12);
+
+    if (allAt(OrderStatus.novo)) {
+      return _cardActionBar(
+        context,
+        label: 'INICIAR PREPARO',
+        color: context.colors.warningColor,
+        onTap: () => ref
+            .read(orderStatusUpdateProvider.notifier)
+            .updateStatus(order.id, OrderStatus.emPreparo),
+      );
+    }
+
+    if (allAt(OrderStatus.emPreparo)) {
+      return _cardActionRow(
+        context,
+        revertTo: isAdmin ? OrderStatus.novo : null,
+        onRevert: (status) => ref
+            .read(orderStatusUpdateProvider.notifier)
+            .updateStatus(order.id, status),
+        label: 'FINALIZAR PREPARO',
+        color: context.colors.successColor,
+        onTap: () => ref
+            .read(orderStatusUpdateProvider.notifier)
+            .updateStatus(order.id, OrderStatus.pronto),
+      );
+    }
+
+    if (allProntoOuEntregue) {
+      return _cardActionRow(
+        context,
+        revertTo: isAdmin ? OrderStatus.emPreparo : null,
+        onRevert: (status) => ref
+            .read(orderStatusUpdateProvider.notifier)
+            .updateStatus(order.id, status),
+        label: 'ENTREGAR',
+        color: context.colors.successColor,
+        onTap: () => ref
+            .read(orderStatusUpdateProvider.notifier)
+            .updateStatus(order.id, OrderStatus.entregue),
+      );
+    }
+
+    // Estado misturado de verdade (nem todos na mesma etapa) — sem ação em
+    // massa; cada item segue avançando pelo próprio chip até realinhar.
+    return const SizedBox(height: 12);
+  }
+
+  /// A barra colorida de largura total (o "ENTREGAR" de sempre), com um
+  /// rótulo e cor configuráveis pra virar também "INICIAR PREPARO" e
+  /// "FINALIZAR PREPARO".
+  ///
+  /// [borderRadius] arredonda só os cantos que realmente tocam a borda do
+  /// card — por padrão os dois de baixo (quando a barra ocupa a linha
+  /// inteira sozinha); [_cardActionRow] passa uma versão com só o canto
+  /// direito quando ela divide a linha com o botão de voltar.
+  Widget _cardActionBar(
+    BuildContext context, {
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+    BorderRadius borderRadius = const BorderRadius.only(
+      bottomLeft: Radius.circular(kOrderCardRadius),
+      bottomRight: Radius.circular(kOrderCardRadius),
+    ),
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: borderRadius,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(color: color, borderRadius: borderRadius),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+              color: Colors.black,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.2),
+        ),
+      ),
+    );
+  }
+
+  /// A mesma barra, com um botão pequeno de "voltar etapa" ao lado quando
+  /// [revertTo] não é nulo — dá ao administrador, no modo comanda inteira, a
+  /// mesma capacidade de corrigir um toque errado que já existia por item.
+  ///
+  /// Os dois ficam encostados um no outro (sem vão entre eles) e só o canto
+  /// que cada um ocupa de verdade no card é arredondado — o de voltar tem o
+  /// canto inferior esquerdo, a barra principal o direito — pra parecer um
+  /// rodapé só, cortado em duas cores, em vez de dois botões soltos.
+  /// `CrossAxisAlignment.stretch` garante que os dois cheguem exatamente na
+  /// mesma altura (senão o botão de voltar, menor, sobraria com um vão em
+  /// cima ou embaixo dele, quebrando esse efeito de rodapé contínuo).
+  Widget _cardActionRow(
+    BuildContext context, {
+    required OrderStatus? revertTo,
+    required ValueChanged<OrderStatus> onRevert,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    if (revertTo == null) {
+      return _cardActionBar(context, label: label, color: color, onTap: onTap);
+    }
+
+    // IntrinsicHeight, e não só `CrossAxisAlignment.stretch`: stretch sozinho
+    // precisa que a altura AMBIENTE já chegue limitada até aqui pra fazer
+    // sentido esticar os dois filhos até ela — e o card aparece embutido em
+    // mais de um lugar (grade, coluna do Kanban) nem todos garantindo isso
+    // sempre. IntrinsicHeight mede a altura que o MAIOR dos dois pediria
+    // sozinho e trava a linha nela, sem depender do que vem de fora — só
+    // funciona sem custo/risco aqui porque nenhum dos dois filhos tem
+    // conteúdo rolável (o motivo de não usar em qualquer lugar).
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _cardRevertButton(context, onTap: () => onRevert(revertTo)),
+          Expanded(
+            child: _cardActionBar(
+              context,
+              label: label,
+              color: color,
+              onTap: onTap,
+              borderRadius: const BorderRadius.only(
+                  bottomRight: Radius.circular(kOrderCardRadius)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Metade esquerda do rodapé quando a barra de ação vem acompanhada de
+  /// "voltar etapa" — só o canto inferior esquerdo é arredondado (o único
+  /// que toca de verdade o contorno do card; o direito encosta na barra
+  /// principal, que arredonda o canto dela). Widget próprio, e não uma
+  /// variação de [_revertButton] (usado nos chips por item, compacto e com
+  /// os 4 cantos iguais): aqui ele estica pra acompanhar a altura da barra
+  /// ao lado (`CrossAxisAlignment.stretch` no Row de [_cardActionRow]).
+  Widget _cardRevertButton(BuildContext context,
+      {required VoidCallback onTap}) {
+    const radius =
+        BorderRadius.only(bottomLeft: Radius.circular(kOrderCardRadius));
+    return Tooltip(
+      message: 'Voltar etapa',
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: radius,
+        child: Container(
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          decoration: BoxDecoration(
+            color: context.colors.errorColor.withValues(alpha: 0.12),
+            borderRadius: radius,
+          ),
+          child: Icon(Icons.undo, size: 16, color: context.colors.errorColor),
+        ),
       ),
     );
   }
 
   Widget _buildKdsItemRow(BuildContext context, WidgetRef ref, Order order,
-      OrderItem item, bool isAdmin) {
+      OrderItem item, bool isAdmin, KdsProductionMode mode) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
@@ -586,7 +807,7 @@ class KDSPage extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: 6),
-          _buildItemAction(context, ref, order, item, isAdmin),
+          _buildItemAction(context, ref, order, item, isAdmin, mode),
         ],
       ),
     );
@@ -667,7 +888,14 @@ class KDSPage extends ConsumerWidget {
   /// veem um botão pra voltar uma etapa (corrigir um avanço feito por
   /// engano), um passo de cada vez.
   Widget _buildItemAction(BuildContext context, WidgetRef ref, Order order,
-      OrderItem item, bool isAdmin) {
+      OrderItem item, bool isAdmin, KdsProductionMode mode) {
+    // No modo comanda inteira, quem avança é o botão do rodapé do card (ver
+    // _buildCardAction) — o item só mostra em que pé está, sem chip
+    // clicável, pra não sugerir uma ação que não existe nesse modo.
+    if (mode == KdsProductionMode.wholeOrder) {
+      return _buildItemStatusGlyph(context, item.status);
+    }
+
     switch (item.status) {
       case OrderStatus.novo:
         return _actionChip(
@@ -722,6 +950,25 @@ class KDSPage extends ConsumerWidget {
                 color: context.colors.successColor, size: 20),
           ],
         );
+      case OrderStatus.entregue:
+        return Icon(Icons.check_circle,
+            color: context.colors.successColor, size: 20);
+    }
+  }
+
+  /// Indicador (sem toque) do status de um item no modo comanda inteira —
+  /// mesmo tamanho/posição do ícone que já existia pros itens "pronto" e
+  /// "entregue" no modo item a item, só cobrindo os quatro status.
+  Widget _buildItemStatusGlyph(BuildContext context, OrderStatus status) {
+    switch (status) {
+      case OrderStatus.novo:
+        return Icon(Icons.radio_button_unchecked,
+            size: 18,
+            color: context.colors.textSecondaryColor.withValues(alpha: 0.6));
+      case OrderStatus.emPreparo:
+        return Icon(Icons.local_fire_department,
+            size: 20, color: context.colors.warningColor);
+      case OrderStatus.pronto:
       case OrderStatus.entregue:
         return Icon(Icons.check_circle,
             color: context.colors.successColor, size: 20);

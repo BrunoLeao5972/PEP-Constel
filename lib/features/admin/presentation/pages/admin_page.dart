@@ -5,6 +5,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/config/order_timing_config_provider.dart';
 import '../../../../core/config/printer_config_provider.dart';
 import '../../../../core/data/mongo_service.dart';
+import '../../../../core/config/alert_appearance_config_provider.dart';
 import '../../../../core/widgets/order_urgency_shell.dart';
 import '../../../orders/presentation/providers/order_provider.dart';
 import '../../../orders/domain/entities/order.dart';
@@ -15,8 +16,8 @@ import '../providers/admin_view_provider.dart';
 /// Painel Administrativo: diferente da Cozinha (que é um quadro de trabalho
 /// ativo, item a item), este é um histórico/dashboard — mostra o que já
 /// passou pela cozinha nas últimas 24h, indicadores operacionais (sem
-/// valores monetários, isso não é o foco do KDS) e permite reimprimir a
-/// senha de um pedido. Não tem botões de avançar status (quem mexe no
+/// valores monetários, isso não é o foco do KDS) e permite imprimir a
+/// senha de um pedido de novo. Não tem botões de avançar status (quem mexe no
 /// preparo é a Cozinha) — só o de reverter uma etapa, e só pra admins,
 /// pra corrigir um avanço feito por engano sem precisar ir até a Cozinha.
 class AdminPage extends ConsumerWidget {
@@ -477,7 +478,8 @@ class AdminPage extends ConsumerWidget {
     final elapsed = DateTime.now().difference(order.timestamp).inMinutes;
     final timing = ref.watch(orderTimingConfigProvider);
     final urgency = orderUrgencyFor(order, elapsed, timing);
-    final timeColor = orderUrgencyColor(context, urgency);
+    final timeColor = orderUrgencyColor(context, urgency,
+        alertsEnabled: ref.watch(alertAppearanceConfigProvider).enabled);
 
     return OrderUrgencyShell(
       urgency: urgency,
@@ -538,9 +540,9 @@ class AdminPage extends ConsumerWidget {
                   ),
                 ),
                 OutlinedButton.icon(
-                  onPressed: () => _showReprintDialog(context, ref, order),
+                  onPressed: () => _printOrder(context, ref, order),
                   icon: const Icon(Icons.print, size: 15),
-                  label: const Text('Reimprimir'),
+                  label: const Text('Imprimir'),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: context.colors.textSecondaryColor,
                     side: BorderSide(color: context.colors.borderColor),
@@ -690,64 +692,32 @@ class AdminPage extends ConsumerWidget {
     return mins == 0 ? '${hours}h' : '${hours}h ${mins}min';
   }
 
-  void _showReprintDialog(BuildContext context, WidgetRef ref, Order order) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: dialogContext.colors.cardColor,
-        title: const Text('Reimprimir pedido'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Pedido #${order.number}',
-                style:
-                    TextStyle(color: dialogContext.colors.textSecondaryColor)),
-            const SizedBox(height: 8),
-            Text(
-              order.modalityDisplay,
-              style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: dialogContext.colors.accentColor),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              'O ticket sai com todos os dados do pedido: itens, quantidades, '
-              'observações e horário — não só a senha.',
-              style: TextStyle(
-                  color: dialogContext.colors.textSecondaryColor, fontSize: 12),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton.icon(
-            onPressed: () async {
-              Navigator.of(dialogContext).pop();
-              final config = ref.read(printerConfigProvider);
-              final db = await ref.read(mongoDbProvider.future);
-              final outcome =
-                  await KdsPrinterService().printOrder(order, config, db: db);
-              if (!context.mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(outcome.success
-                      ? 'Pedido #${order.number} reimpresso.'
-                      : (outcome.error ?? 'Falha ao imprimir.')),
-                  backgroundColor: outcome.success
-                      ? context.colors.successColor
-                      : context.colors.errorColor,
-                ),
-              );
-            },
-            icon: const Icon(Icons.print, size: 18),
-            label: const Text('Reimprimir'),
-          ),
-        ],
+  /// Imprime direto, sem diálogo de confirmação prévio — só um popup de 2
+  /// segundos avisando se saiu ou não. O ticket sai com todos os dados do
+  /// pedido (itens, quantidades, observações e horário), não só a senha.
+  Future<void> _printOrder(
+      BuildContext context, WidgetRef ref, Order order) async {
+    KdsPrintOutcome outcome;
+    try {
+      final config = ref.read(printerConfigProvider);
+      final db = await ref.read(mongoDbProvider.future);
+      outcome = await KdsPrinterService().printOrder(order, config, db: db);
+    } catch (e) {
+      // Sem isso, uma falha ao montar o ticket ou falar com a impressora
+      // (ex.: caractere não suportado, impressora desligada) derrubava a
+      // Future sem exibir nada — o usuário só via o botão "não fazer nada".
+      outcome = KdsPrintOutcome.failure('Falha ao imprimir: $e');
+    }
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(outcome.success
+            ? 'Pedido #${order.number} impresso.'
+            : (outcome.error ?? 'Falha ao imprimir.')),
+        backgroundColor: outcome.success
+            ? context.colors.successColor
+            : context.colors.errorColor,
+        duration: const Duration(seconds: 2),
       ),
     );
   }

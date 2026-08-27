@@ -5,8 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mongo_dart/mongo_dart.dart' show Db;
 import '../../../../core/config/mongo_config.dart';
 import '../../../../core/config/mongo_config_provider.dart';
+import '../../../../core/config/kds_production_mode_config.dart';
+import '../../../../core/config/kds_production_mode_config_provider.dart';
 import '../../../../core/config/order_caller_config.dart';
 import '../../../../core/config/order_caller_config_provider.dart';
+import '../../../../core/config/alert_appearance_config.dart';
+import '../../../../core/config/alert_appearance_config_provider.dart';
 import '../../../../core/config/order_timing_config.dart';
 import '../../../../core/config/order_timing_config_provider.dart';
 import '../../../../core/config/panel_display_config_provider.dart';
@@ -699,9 +703,63 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     final modalities = ref.watch(serviceModalitiesConfigProvider);
     final panelDisplay = ref.watch(panelDisplayConfigProvider);
     final callerConfig = ref.watch(orderCallerConfigProvider);
+    final productionMode = ref.watch(kdsProductionModeConfigProvider).mode;
 
     return SettingsCardGrid(
       children: [
+        SettingsSectionCard(
+          icon: Icons.checklist_rtl_outlined,
+          title: 'Modo de Produção',
+          subtitle: 'Como toda comanda avança pelas etapas na Cozinha — '
+              'recebido, em preparo, pronto e entregue. Vale pra todos os '
+              'pedidos ativos.',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SegmentedButton<KdsProductionMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: KdsProductionMode.perItem,
+                    label: Text('Item por item'),
+                  ),
+                  ButtonSegment(
+                    value: KdsProductionMode.wholeOrder,
+                    label: Text('Comanda inteira'),
+                  ),
+                  ButtonSegment(
+                    value: KdsProductionMode.mixed,
+                    label: Text('Misto'),
+                  ),
+                ],
+                selected: {productionMode},
+                showSelectedIcon: false,
+                onSelectionChanged: (selection) => ref
+                    .read(kdsProductionModeConfigProvider.notifier)
+                    .setMode(selection.first),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                switch (productionMode) {
+                  KdsProductionMode.perItem =>
+                    'Cada produto tem seus próprios botões e avança '
+                        'sozinho — bom quando itens da mesma comanda ficam '
+                        'prontos em momentos diferentes.',
+                  KdsProductionMode.wholeOrder =>
+                    'Um botão só avança TODOS os itens da comanda de uma '
+                        'vez, em cada etapa: Iniciar Comanda, Finalizar '
+                        'Comanda e Entregar.',
+                  KdsProductionMode.mixed =>
+                    'Cada item mantém seu próprio botão, e também aparece '
+                        'um botão de avançar tudo — mas só quando todos os '
+                        'itens da comanda estão exatamente na mesma etapa; '
+                        'num estado misturado, esse botão some e sobram os '
+                        'botões individuais.',
+                },
+                style: TextStyle(fontSize: 12, color: tokens.secondaryText),
+              ),
+            ],
+          ),
+        ),
         SettingsSectionCard(
           icon: Icons.storefront_outlined,
           title: 'Modalidades de Atendimento',
@@ -844,6 +902,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
   // ---------------------------------------------------------------------
 
   Widget _buildPrinterTab(BuildContext context, SettingsTokens tokens) {
+    final appearance = ref.watch(alertAppearanceConfigProvider);
+
     return SettingsCardGrid(
       children: [
         SettingsSectionCard(
@@ -858,7 +918,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           child: Platform.isWindows
               ? const PrinterSettingsWidget()
               : Text(
-                  'Este aparelho não imprime direto: os pedidos de reimpressão '
+                  'Este aparelho não imprime direto: os pedidos de impressão '
                   'entram numa fila e são impressos pelo PC com a impressora '
                   'conectada. Configure a impressora naquele computador.',
                   style: TextStyle(color: tokens.secondaryText, fontSize: 13),
@@ -899,6 +959,64 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
             ],
           ),
         ),
+        SettingsSectionCard(
+          icon: Icons.notifications_active_outlined,
+          title: 'Aparência dos Alertas',
+          subtitle: 'Como o destaque de pedido atrasado se comporta na tela '
+              'da Cozinha e no Administrativo — independente de QUANDO ele '
+              'aparece (isso é o card ao lado).',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildModalitySwitch(
+                context,
+                label: 'Alertas visuais',
+                hint: 'Desligado, nenhum pedido atrasado se destaca por '
+                    'cor — nem o card, nem o tempo decorrido.',
+                value: appearance.enabled,
+                onChanged: (value) => ref
+                    .read(alertAppearanceConfigProvider.notifier)
+                    .setEnabled(value),
+              ),
+              const SizedBox(height: 4),
+              _buildModalitySwitch(
+                context,
+                label: 'Animação (piscar)',
+                hint: 'Desligado, o card fica com o destaque fixo na cor '
+                    'de pico, sem piscar.',
+                value: appearance.animationEnabled,
+                enabled: appearance.enabled,
+                onChanged: (value) => ref
+                    .read(alertAppearanceConfigProvider.notifier)
+                    .setAnimationEnabled(value),
+              ),
+              const SizedBox(height: 16),
+              _buildAlertIntensitySlider(
+                context,
+                label: 'Intensidade da cor',
+                value: appearance.colorIntensity,
+                min: AlertAppearanceConfig.minColorIntensity,
+                max: AlertAppearanceConfig.maxColorIntensity,
+                enabled: appearance.enabled,
+                onChanged: (value) => ref
+                    .read(alertAppearanceConfigProvider.notifier)
+                    .setColorIntensity(value),
+              ),
+              const SizedBox(height: 8),
+              _buildAlertIntensitySlider(
+                context,
+                label: 'Velocidade do pisca',
+                value: appearance.speedFactor,
+                min: AlertAppearanceConfig.minSpeedFactor,
+                max: AlertAppearanceConfig.maxSpeedFactor,
+                enabled: appearance.enabled && appearance.animationEnabled,
+                onChanged: (value) => ref
+                    .read(alertAppearanceConfigProvider.notifier)
+                    .setSpeedFactor(value),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -934,26 +1052,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
     String? hint,
     required bool value,
     required ValueChanged<bool> onChanged,
+    bool enabled = true,
   }) {
     final tokens = SettingsTokens.of(context);
+    // Desabilitado (ex: "Animação" quando o alerta mestre está desligado):
+    // o texto apaga junto com o switch, pra ficar claro que o controle não
+    // é só visualmente cinza — ele realmente não faz nada nesse estado.
+    final textOpacity = enabled ? 1.0 : 0.45;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(
         children: [
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: const TextStyle(fontWeight: FontWeight.w600)),
-                if (hint != null)
-                  Text(
-                    hint,
-                    style:
-                        TextStyle(fontSize: 11.5, color: tokens.secondaryText),
-                  ),
-              ],
+            child: Opacity(
+              opacity: textOpacity,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  if (hint != null)
+                    Text(
+                      hint,
+                      style: TextStyle(
+                          fontSize: 11.5, color: tokens.secondaryText),
+                    ),
+                ],
+              ),
             ),
           ),
           // Escala reduzida: o switch do Material 3 em tamanho cheio, seis
@@ -962,7 +1088,57 @@ class _SettingsPageState extends ConsumerState<SettingsPage>
           Transform.scale(
             scale: 0.8,
             alignment: Alignment.centerRight,
-            child: Switch(value: value, onChanged: onChanged),
+            child: Switch(value: value, onChanged: enabled ? onChanged : null),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Slider de porcentagem (intensidade da cor / velocidade do pisca) — os
+  /// dois têm a mesma forma: rótulo, valor em % à direita, e um `Slider`
+  /// desabilitado (em vez de escondido) quando não se aplica, pra deixar
+  /// claro que a opção existe mas está condicionada a outra chave acima.
+  Widget _buildAlertIntensitySlider(
+    BuildContext context, {
+    required String label,
+    required double value,
+    required double min,
+    required double max,
+    required ValueChanged<double> onChanged,
+    bool enabled = true,
+  }) {
+    final tokens = SettingsTokens.of(context);
+    final percent = (value * 100).round();
+
+    return Opacity(
+      opacity: enabled ? 1.0 : 0.45,
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Text(label,
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          Expanded(
+            flex: 5,
+            child: Slider(
+              value: value.clamp(min, max),
+              min: min,
+              max: max,
+              divisions: ((max - min) * 20).round(),
+              label: '$percent%',
+              onChanged: enabled ? onChanged : null,
+            ),
+          ),
+          SizedBox(
+            width: 44,
+            child: Text(
+              '$percent%',
+              textAlign: TextAlign.end,
+              style: TextStyle(
+                  color: tokens.secondaryText, fontWeight: FontWeight.w600),
+            ),
           ),
         ],
       ),

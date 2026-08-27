@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 import '../theme/settings_tokens.dart';
 
@@ -32,11 +33,17 @@ class SettingsSectionCard extends StatelessWidget {
     this.fillHeight = false,
   });
 
+  /// Folga só na altura intrínseca relatada (ver [_IntrinsicHeightSlack]) —
+  /// cobre a imprecisão conhecida do Flutter ao medir a altura intrínseca de
+  /// `TextField`/`InputDecorator` (pode subestimar alguns pixels conforme
+  /// fonte/DPI/plataforma), sem inflar o card no layout de verdade.
+  static const _intrinsicHeightSlack = 16.0;
+
   @override
   Widget build(BuildContext context) {
     final tokens = SettingsTokens.of(context);
 
-    return Container(
+    final card = Container(
       decoration: BoxDecoration(
         color: tokens.cardBackground,
         borderRadius: BorderRadius.circular(SettingsTokens.cardRadius),
@@ -78,15 +85,90 @@ class SettingsSectionCard extends StatelessWidget {
         ],
       ),
     );
+
+    if (fillHeight) return card;
+
+    // Só entra em jogo quando o card divide linha com outro mais alto (ver
+    // SettingsCardGrid, que iguala os dois via IntrinsicHeight): sem a
+    // folga, um card com TextField podia relatar precisar de menos altura
+    // intrínseca do que realmente precisa no layout de verdade — a linha
+    // saía travada exatamente no limite, e QUALQUER coisa reduzindo essa
+    // margem quase nula (fonte carregando depois do primeiro frame, DPI de
+    // outra máquina) estourava o card por poucos pixels. Não dá pra resolver
+    // detectando "estou apertado" em tempo real — um LayoutBuilder aqui
+    // quebraria o próprio IntrinsicHeight, que exige que todo descendente
+    // saiba responder sua altura intrínseca sem rodar um layout de verdade.
+    return _IntrinsicHeightSlack(
+      extraIntrinsicHeight: _intrinsicHeightSlack,
+      child: card,
+    );
+  }
+}
+
+/// Relata `extraIntrinsicHeight` A MAIS do que [child] pediria, só nas
+/// consultas de altura intrínseca (as que `IntrinsicHeight` usa pra decidir
+/// a altura de uma linha) — no layout de verdade, [child] recebe exatamente
+/// as constraints que chegam, sem folga nenhuma, então isto não muda o
+/// tamanho real de nada.
+///
+/// Sem isso, dar folga direto no `Column` do card (um `SizedBox` extra
+/// dentro dele, por exemplo) não resolve a imprecisão do TextField: a folga
+/// entraria IGUALMENTE na altura intrínseca relatada e na altura real
+/// pedida, cancelando-se — o cálculo seguinte mostra por quê. Sendo `R` a
+/// altura real que o card precisa e `R - g` o que ele relata de intrínseca
+/// (`g` = o quanto o Flutter subestima), somar `S` dentro do card dá
+/// `(R - g + S)` de intrínseca contra `(R + S)` de real: a diferença
+/// continua `g`, não importa o valor de `S`. Aqui a folga só entra do lado
+/// da consulta intrínseca, então ela de fato reduz essa diferença.
+class _IntrinsicHeightSlack extends SingleChildRenderObjectWidget {
+  final double extraIntrinsicHeight;
+
+  const _IntrinsicHeightSlack({
+    required this.extraIntrinsicHeight,
+    required Widget super.child,
+  });
+
+  @override
+  _RenderIntrinsicHeightSlack createRenderObject(BuildContext context) {
+    return _RenderIntrinsicHeightSlack(extraIntrinsicHeight);
+  }
+
+  @override
+  void updateRenderObject(
+      BuildContext context, _RenderIntrinsicHeightSlack renderObject) {
+    renderObject.extraIntrinsicHeight = extraIntrinsicHeight;
+  }
+}
+
+class _RenderIntrinsicHeightSlack extends RenderProxyBox {
+  _RenderIntrinsicHeightSlack(this.extraIntrinsicHeight);
+
+  double extraIntrinsicHeight;
+
+  @override
+  double computeMinIntrinsicHeight(double width) {
+    final base = super.computeMinIntrinsicHeight(width);
+    return base.isFinite ? base + extraIntrinsicHeight : base;
+  }
+
+  @override
+  double computeMaxIntrinsicHeight(double width) {
+    final base = super.computeMaxIntrinsicHeight(width);
+    return base.isFinite ? base + extraIntrinsicHeight : base;
   }
 }
 
 /// Distribui os cards em duas colunas no desktop e numa só em telas
-/// estreitas.
+/// estreitas — cada LINHA de duas colunas com a mesma altura (a do card
+/// mais alto do par), e não cada card "abraçando" só o próprio conteúdo.
 ///
-/// São duas `Column` lado a lado, e não um `GridView`: os cards têm alturas
-/// bem diferentes (um switch contra um formulário inteiro), e uma grade de
-/// verdade esticaria todos à altura do maior, deixando buracos enormes.
+/// A versão anterior jogava os cards em duas colunas que ACUMULAVAM altura
+/// de forma independente (0, 2, 4... numa coluna; 1, 3, 5... na outra). Com
+/// cards de conteúdo bem diferente (um switch contra um formulário inteiro),
+/// isso não só deixava pares visualmente desalinhados como, com um número
+/// ímpar de cards, sobrava um card sozinho numa coluna com um vão vazio do
+/// lado — a "grade" parava de parecer grade a partir da segunda linha.
+/// Montar linha por linha (aqui) resolve os dois problemas de uma vez.
 class SettingsCardGrid extends StatelessWidget {
   final List<Widget> children;
 
@@ -96,50 +178,45 @@ class SettingsCardGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth < SettingsTokens.twoColumnBreakpoint) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: _withSpacing(children),
-          );
+        final columns =
+            constraints.maxWidth < SettingsTokens.twoColumnBreakpoint ? 1 : 2;
+
+        final rows = <Widget>[];
+        for (var i = 0; i < children.length; i += columns) {
+          if (rows.isNotEmpty) {
+            rows.add(const SizedBox(height: SettingsTokens.cardSpacing));
+          }
+          rows.add(_buildRow(children.skip(i).take(columns).toList()));
         }
 
-        // Alternado (0, 2, 4... à esquerda; 1, 3, 5... à direita) para a
-        // ordem de leitura em zigue-zague bater com a ordem em que os cards
-        // foram declarados.
-        final left = <Widget>[];
-        final right = <Widget>[];
-        for (var i = 0; i < children.length; i++) {
-          (i.isEven ? left : right).add(children[i]);
-        }
-
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: _withSpacing(left),
-              ),
-            ),
-            const SizedBox(width: SettingsTokens.cardSpacing),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: _withSpacing(right),
-              ),
-            ),
-          ],
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: rows,
         );
       },
     );
   }
 
-  List<Widget> _withSpacing(List<Widget> cards) {
-    final spaced = <Widget>[];
-    for (var i = 0; i < cards.length; i++) {
-      if (i > 0) spaced.add(const SizedBox(height: SettingsTokens.cardSpacing));
-      spaced.add(cards[i]);
-    }
-    return spaced;
+  Widget _buildRow(List<Widget> rowCards) {
+    // Coluna única, ou último card sobrando numa linha ímpar: ocupa a linha
+    // inteira em vez de ficar preso numa metade ao lado do vazio.
+    if (rowCards.length == 1) return rowCards.first;
+
+    // IntrinsicHeight mede a altura que cada card pediria por conta própria
+    // e trava a linha inteira nessa medida (a do mais alto) — é o mesmo
+    // truque usado pra igualar colunas num layout CSS, só que em Flutter.
+    // Nenhum card do app usa lista/grade rolável por dentro (o que quebraria
+    // essa medição), então é seguro aqui.
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < rowCards.length; i++) ...[
+            if (i > 0) const SizedBox(width: SettingsTokens.cardSpacing),
+            Expanded(child: rowCards[i]),
+          ],
+        ],
+      ),
+    );
   }
 }

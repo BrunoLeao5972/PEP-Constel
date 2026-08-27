@@ -101,6 +101,41 @@ void main() {
     });
   }
 
+  testWidgets(
+      'Em Preparo mostra o mesmo número de slots por linha que Fila de '
+      'Prontos', (tester) async {
+    // Largura grande o bastante pra caber várias colunas nas duas seções —
+    // é justamente aí que a diferença de densidade antiga (tileWidth 190 vs
+    // 170) aparecia.
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          orderRepositoryProvider.overrideWithValue(_FakeOrderRepository()),
+        ],
+        child: MaterialApp(
+            theme: AppThemes.dark, home: const CustomerFacingPage()),
+      ),
+    );
+    await tester.pump();
+
+    final delegates = tester
+        .widgetList<GridView>(find.byType(GridView))
+        .map((grid) =>
+            grid.gridDelegate as SliverGridDelegateWithFixedCrossAxisCount)
+        .toList();
+
+    // Uma grade pra "Em Preparo" (9 pedidos) e outra pra "Fila de Prontos"
+    // (6, descontado o que está em destaque em "Chamando Agora") — as duas
+    // colunas têm o mesmo flex (3) no layout, então devem caber o mesmo
+    // número de colunas lado a lado.
+    expect(delegates, hasLength(2));
+    expect(delegates[0].crossAxisCount, delegates[1].crossAxisCount);
+  });
+
   for (final width in <double>[1060, 900, 820, 700, 480, 360]) {
     testWidgets('Configurações sem overflow com $width de largura',
         (tester) async {

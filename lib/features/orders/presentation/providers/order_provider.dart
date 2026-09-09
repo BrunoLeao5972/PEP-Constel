@@ -1,8 +1,14 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:developer' as developer;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/data/mongo_service.dart';
 import '../../domain/entities/order.dart';
 import '../../domain/repositories/order_repository.dart';
+import '../../domain/services/order_trace_event_builder.dart';
 import '../../data/repositories/mongo_order_repository.dart';
+import '../../data/services/order_trace_file_sink.dart';
 
 final orderRepositoryProvider = Provider<OrderRepository>((ref) {
   final db = ref.watch(mongoDbProvider).requireValue;
@@ -91,6 +97,15 @@ final itemStatusOverridesProvider = StateNotifierProvider<
   return ItemStatusOverridesController(ref);
 });
 
+OrderItem _withStatus(OrderItem item, OrderStatus status) => OrderItem(
+      id: item.id,
+      name: item.name,
+      quantity: item.quantity,
+      status: status,
+      imageUrl: item.imageUrl,
+      observation: item.observation,
+    );
+
 List<Order> _applyOverrides(
     List<Order> orders, Map<String, OrderStatus> overrides) {
   if (overrides.isEmpty) return orders;
@@ -100,18 +115,37 @@ List<Order> _applyOverrides(
       final override = overrides[item.id];
       if (override == null || override == item.status) return item;
       changedAny = true;
-      return OrderItem(
-        id: item.id,
-        name: item.name,
-        quantity: item.quantity,
-        status: override,
-        imageUrl: item.imageUrl,
-        observation: item.observation,
-      );
+      return _withStatus(item, override);
     }).toList();
     return changedAny ? order.copyWith(items: items) : order;
   }).toList();
 }
+
+/// Pra onde um evento de rastreabilidade vai. Fica isolado num provider —
+/// o destino de verdade (gravar numa coleção do Mongo, mandar por HTTP pra
+/// retaguarda etc.) ainda não foi decidido com o tech lead, e assim dá pra
+/// trocar só este provider (em [main.dart] ou onde a instância de produção
+/// for montada) sem tocar em [OrderStatusNotifier]. Síncrono de propósito:
+/// a atualização de status do pedido não deve esperar (nem falhar por
+/// causa de um evento de auditoria) — se a implementação de verdade for
+/// assíncrona (grava no Mongo, chama um endpoint), ela cuida disso sozinha
+/// (fire-and-forget) em vez de propagar a Future pra cá.
+typedef OrderTraceSink = void Function(Map<String, dynamic> event);
+
+/// Implementação padrão: grava num arquivo local (`order_trace_file_sink.dart`)
+/// — funciona rodando o app instalado (release), não só em `flutter run`.
+/// `developer.log` sozinho não serviria pra isso: ele só aparece com o VM
+/// service anexado (DevTools/`flutter run` em debug), que não existe num
+/// `.exe`/`.apk` de produção — por isso ainda manda pra lá também (útil
+/// durante o desenvolvimento), mas o arquivo é quem garante que o evento
+/// fica visível pra quem só tem o app instalado.
+void _logOrderTraceEvent(Map<String, dynamic> event) {
+  developer.log(jsonEncode(event), name: 'order_trace');
+  unawaited(appendOrderTraceEvent(event));
+}
+
+final orderTraceSinkProvider =
+    Provider<OrderTraceSink>((ref) => _logOrderTraceEvent);
 
 /// ordersStreamProvider com os overrides otimistas aplicados — usar em vez do
 /// original em qualquer tela que exiba status de item (Cozinha/Admin).
@@ -143,9 +177,8 @@ class OrderStatusNotifier extends StateNotifier<AsyncValue<void>> {
         _ref.read(orderHistoryStreamProvider).valueOrNull;
     final matches =
         knownOrders?.where((o) => o.id == orderId) ?? const <Order>[];
-    final itemIds = matches.isEmpty
-        ? const <String>[]
-        : matches.first.items.map((i) => i.id);
+    final beforeOrder = matches.isEmpty ? null : matches.first;
+    final itemIds = beforeOrder?.items.map((i) => i.id) ?? const <String>[];
     final overrides = _ref.read(itemStatusOverridesProvider.notifier);
     overrides.setMany(itemIds, newStatus);
 
@@ -153,6 +186,14 @@ class OrderStatusNotifier extends StateNotifier<AsyncValue<void>> {
     try {
       await _repository.updateOrderStatus(orderId, newStatus);
       state = const AsyncValue.data(null);
+      if (beforeOrder != null) {
+        final afterOrder = beforeOrder.copyWith(
+          items: beforeOrder.items
+              .map((item) => _withStatus(item, newStatus))
+              .toList(),
+        );
+        _emitOrderTraceIfStatusChanged(beforeOrder, afterOrder);
+      }
     } catch (e, stack) {
       for (final id in itemIds) {
         overrides.clear(id);
@@ -163,6 +204,12 @@ class OrderStatusNotifier extends StateNotifier<AsyncValue<void>> {
 
   Future<void> updateItemStatus(
       String orderId, String itemId, OrderStatus newStatus) async {
+    final knownOrders = _ref.read(ordersStreamProvider).valueOrNull ??
+        _ref.read(orderHistoryStreamProvider).valueOrNull;
+    final matches =
+        knownOrders?.where((o) => o.id == orderId) ?? const <Order>[];
+    final beforeOrder = matches.isEmpty ? null : matches.first;
+
     final overrides = _ref.read(itemStatusOverridesProvider.notifier);
     overrides.set(itemId, newStatus);
 
@@ -170,10 +217,33 @@ class OrderStatusNotifier extends StateNotifier<AsyncValue<void>> {
     try {
       await _repository.updateItemStatus(orderId, itemId, newStatus);
       state = const AsyncValue.data(null);
+      if (beforeOrder != null) {
+        final afterOrder = beforeOrder.copyWith(
+          items: beforeOrder.items
+              .map((item) => item.id == itemId
+                  ? _withStatus(item, newStatus)
+                  : item)
+              .toList(),
+        );
+        _emitOrderTraceIfStatusChanged(beforeOrder, afterOrder);
+      }
     } catch (e, stack) {
       overrides.clear(itemId);
       state = AsyncValue.error(e, stack);
     }
+  }
+
+  /// Só emite se [afterOrder] realmente mudou de status AGREGADO em
+  /// relação a [beforeOrder] — não a cada clique em item: no modo item a
+  /// item, vários toques acontecem sem o pedido como um todo mudar de
+  /// etapa (ver [Order.status]), e o pedido do tech lead foi rastrear as
+  /// transições do pedido, não cada micro-ação da cozinha.
+  void _emitOrderTraceIfStatusChanged(Order beforeOrder, Order afterOrder) {
+    final previousStatus = beforeOrder.status;
+    if (previousStatus == afterOrder.status) return;
+    final event = buildOrderTraceEvent(afterOrder,
+        eventAt: DateTime.now(), previousStatus: previousStatus);
+    _ref.read(orderTraceSinkProvider)(event);
   }
 }
 
